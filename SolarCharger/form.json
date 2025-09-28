@@ -3,8 +3,7 @@
         {
             "type": "CheckBox",
             "name": "enabled",
-            "caption": "Charger control enabled",
-            "required": true
+            "caption": "Charger control enabled"
         },
         {
             "type": "NumberSpinner",
