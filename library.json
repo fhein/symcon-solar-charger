@@ -1,7 +1,7 @@
 {
   "id": "{FA6D3B7E-02C9-4C7B-9B8F-7F5B9E13A2C1}",
-  "name": "SolarCharger",
-  "author": "fhein",
+  "type": 1
+  "author": "maxence GmbH",
   "url": "https://github.com/fhein/symcon-solar-charger",
   "compatibility": { "version": "5.5" },
   "version": "1.0",
