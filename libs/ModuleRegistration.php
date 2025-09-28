@@ -107,8 +107,10 @@ class MaxenceModuleRegistration {
         $property = $this->reflection->getProperty('InstanceID');
         $property->setAccessible(true);
         $instanceId = $property->getValue($this->module);
-        $moduleInfo = IPS_GetModule($instanceId);
-        $moduleId = $moduleInfo['ModuleID'];
+        // IPS_GetModule expects a Module GUID, not an instance ID.
+        // First resolve the instance to obtain its ModuleID (GUID), then list all instances of that module.
+        $instanceInfo = IPS_GetInstance($instanceId);
+        $moduleId = $instanceInfo['ModuleInfo']['ModuleID'];
         $instances = IPS_GetInstanceListByModuleID($moduleId);
         return count($instances) === 1;
     }

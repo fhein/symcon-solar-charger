@@ -1,15 +1,15 @@
 # symcon-solar-charger
 
-IP-Symcon I/O Modul ff r die Tinkerforge WARP2 Wallbox API. Pollt `evse/state` und legt Statusvariablen an.
+IP-Symcon Modul zur solargestützten Steuerung einer WARP2-Ladestation auf Basis eines neutralen Energie-Gateways (z. B. Enphase).
 
-- Modul: `Tinkerforge/Warp2Gateway`
-- Library: `Tinkerforge/library.json`
+- Library: `maxence` (library.json)
+- Modul: `SolarCharger`
 
 ## Installation
 
-Im Module Control folgende URL hinzufgen:
+Im Module Control folgende URL hinzufügen:
 
-https://github.com/fhein/symcon-warp2-gateway
+https://github.com/fhein/symcon-solar-charger
 
 ## Lizenz
 
