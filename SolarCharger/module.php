@@ -52,8 +52,7 @@ class SolarCharger extends IPSModule
 			if ($energyGateway > 0) {
 				@IPS_ConnectInstance($this->InstanceID, $energyGateway);
 			} else {
-				// Fall back to interface-based connect to any parent exposing the neutral energy interface
-				$this->ConnectParent('{E1E5D9C2-3A4B-4C5D-9E8F-ABCDEF123456}');
+				$this->connectToInterfaceParent('{E1E5D9C2-3A4B-4C5D-9E8F-ABCDEF123456}');
 			}
 		} catch (Exception $e) {
 			$this->LogMessage('ApplyChanges: could not connect to energy gateway: ' . $e->getMessage(), KL_ERROR);
@@ -707,6 +706,28 @@ class SolarCharger extends IPSModule
 			"user"     => $this->ReadPropertyString('user'),
 			"password" => $this->ReadPropertyString('password'),
 		];
+	}
+
+	private function connectToInterfaceParent(string $interfaceGuid): void
+	{
+		$moduleIds = IPS_GetModuleList();
+		foreach ($moduleIds as $moduleId) {
+			$module = IPS_GetModule($moduleId);
+			$implemented = $module['Implemented'] ?? [];
+			if (!in_array($interfaceGuid, $implemented, true)) {
+				continue;
+			}
+			$instances = IPS_GetInstanceListByModuleID($moduleId);
+			foreach ($instances as $instanceId) {
+				if (!IPS_InstanceExists($instanceId)) {
+					continue;
+				}
+				if (@IPS_ConnectInstance($this->InstanceID, $instanceId)) {
+					return;
+				}
+			}
+		}
+		$this->LogMessage('ApplyChanges: no parent instance implementing neutral energy interface found.', KL_WARNING);
 	}
 
 }
