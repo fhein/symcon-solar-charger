@@ -1,0 +1,11 @@
+{
+    "translations": {
+        "de": {
+            "Update interval (seconds)": "Aktualisierungsintervall (Sekunden)",
+            "Max Standby Baseload (Watt)": "Maximale Standby-Grundlast (Watt)",
+            "Use Battery for car charging (Percent)": "Batterie für das Laden des Autos verwenden (Prozent)",
+            "Max charger current (Ampere)": "Maximaler Wallbox Ladestrom (Ampere)",
+            "Min charger current (Ampere)": "Minimaler Wallbox Ladestrom (Ampere)"
+        }
+    }
+}

@@ -4,7 +4,7 @@ declare(strict_types=1);
 // Use local libs helper once added under maxence/libs
 require_once __DIR__ . '/../libs/ModuleRegistration.php';
 
-class SolarCharger extends IPSModule
+class SmartChargingManager extends IPSModule
 {
 
 	protected $api = null; // kept for backward compatibility; not used for Warp2 anymore
@@ -31,7 +31,7 @@ class SolarCharger extends IPSModule
 			$this->SetBuffer('houseConsumptionFallback', '');
 			$this->SetBuffer('lastChargerState', '-1');
 		} catch (Exception $e) {
-			$this->LogMessage(__CLASS__ . ': Error creating SolarCharger: ' . $e->getMessage(), KL_ERROR);
+			$this->LogMessage(__CLASS__ . ': Error creating instance: ' . $e->getMessage(), KL_ERROR);
 		}
 	}
 
