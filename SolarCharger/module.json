@@ -2,13 +2,8 @@
     "id": "{8BA08397-8DDB-23F6-2A34-F61159FFA6B8}",
     "name": "SolarCharger",
     "type": 3,
-    "vendor": "maxence gmbh",
-    "aliases": [
-        "Smart Charging Manager",
-        "PV Smart Charging Manager",
-        "Energy-Aware Charging Controller",
-        "EVSE Smart Charging Controller"
-    ],
+    "vendor": "maxence",
+    "aliases": [],
     "parentRequirements": [
         "{E1E5D9C2-3A4B-4C5D-9E8F-ABCDEF123456}"
     ],
