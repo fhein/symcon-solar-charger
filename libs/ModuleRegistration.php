@@ -107,68 +107,67 @@ class MaxenceModuleRegistration {
         $property = $this->reflection->getProperty('InstanceID');
         $property->setAccessible(true);
         $instanceId = $property->getValue($this->module);
-        // IPS_GetModule expects a Module GUID, not an instance ID.
-        // First resolve the instance to obtain its ModuleID (GUID), then list all instances of that module.
-        $instanceInfo = IPS_GetInstance($instanceId);
-        $moduleId = $instanceInfo['ModuleInfo']['ModuleID'];
+        $moduleInfo = IPS_GetModule($instanceId);
+        $moduleId = $moduleInfo['ModuleID'];
         $instances = IPS_GetInstanceListByModuleID($moduleId);
         return count($instances) === 1;
     }
 
     public function RegisterProfiles($profiles, $updateExisting = true) {
+		
         if (empty($profiles)) return;
 
-        foreach ($profiles as $profileName => $settings) {
-            $type = $this->typeMapping[$settings['type']] ?? null;
-    
-            if (is_null($type)) {
+		foreach ($profiles as $profileName => $settings) {
+			$type = $this->typeMapping[$settings['type']] ?? null;
+	
+			if (is_null($type)) {
                 throw new Exception("Unsupported profile type: " . $settings['type']);
-                continue;
-            }
-    
-            $profileExists = IPS_VariableProfileExists($profileName);
-    
-            // If the profile exists and we are not updating, skip
-            if ($profileExists && !$updateExisting) {
-                continue;
-            }
-            
-            // If the profile doesn't exist, create it
-            if (!$profileExists) {
-                IPS_CreateVariableProfile($profileName, $type);
-            }
-            
-            // Update the common settings
-            IPS_SetVariableProfileIcon($profileName, $settings['icon']);
-            
-            // The text suffix is valid for all types except Boolean
-            if ($type !== 0 && isset($settings['suffix'])) {
-                IPS_SetVariableProfileText($profileName, "", $settings['suffix']);
-            }
-    
-            // These are valid for Float and Integer types
-            if (in_array($type, [1, 2]) && isset($settings['minValue'])) {
-                IPS_SetVariableProfileValues($profileName, $settings['minValue'], $settings['maxValue'] ?? 0, $settings['stepSize'] ?? ($type === 2 ? 0.1 : 1));
-            }
-            
-            // ActionScript is valid for all types
-            if (isset($settings['actionScript'])) {
-                IPS_SetVariableProfileAction($profileName, $settings['actionScript']);
-            }
-    
-            // Association is valid for all types
-            if (isset($settings['associations'])) {
-                foreach ($settings['associations'] as $association) {
-                    IPS_SetVariableProfileAssociation($profileName, $association['value'], $association['text'], $association['icon'], $association['color']);
-                }
-            }
-            
-            // Digital formatting is only valid for Float
-            if ($type === 2 && isset($settings['digits'])) {
-                IPS_SetVariableProfileDigits($profileName, $settings['digits']);
-            }
-        }
-    }
+				continue;
+			}
+	
+			$profileExists = IPS_VariableProfileExists($profileName);
+	
+			// If the profile exists and we are not updating, skip
+			if ($profileExists && !$updateExisting) {
+				continue;
+			}
+			
+			// If the profile doesn't exist, create it
+			if (!$profileExists) {
+				IPS_CreateVariableProfile($profileName, $type);
+			}
+			
+			// Update the common settings
+			IPS_SetVariableProfileIcon($profileName, $settings['icon']);
+			
+			// The text suffix is valid for all types except Boolean
+			if ($type !== 0 && isset($settings['suffix'])) {
+				IPS_SetVariableProfileText($profileName, "", $settings['suffix']);
+			}
+	
+			// These are valid for Float and Integer types
+			if (in_array($type, [1, 2]) && isset($settings['minValue'])) {
+				IPS_SetVariableProfileValues($profileName, $settings['minValue'], $settings['maxValue'] ?? 0, $settings['stepSize'] ?? ($type === 2 ? 0.1 : 1));
+			}
+			
+			// ActionScript is valid for all types
+			if (isset($settings['actionScript'])) {
+				IPS_SetVariableProfileAction($profileName, $settings['actionScript']);
+			}
+	
+			// Association is valid for all types
+			if (isset($settings['associations'])) {
+				foreach ($settings['associations'] as $association) {
+					IPS_SetVariableProfileAssociation($profileName, $association['value'], $association['text'], $association['icon'], $association['color']);
+				}
+			}
+			
+			// Digital formatting is only valid for Float
+			if ($type === 2 && isset($settings['digits'])) {
+				IPS_SetVariableProfileDigits($profileName, $settings['digits']);
+			}
+		}
+	}
 
     private function validateItem($typePrefix, $item) {
         // Check if the type prefix is valid
@@ -190,6 +189,7 @@ class MaxenceModuleRegistration {
     }
     
     private function registerItems($typePrefix, $items) {
+
         if (empty($items)) return;
 
         foreach ($items as $ident => $item) {
@@ -231,3 +231,4 @@ class MaxenceModuleRegistration {
         return $result;
     }
 }
+    
