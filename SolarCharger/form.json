@@ -1,0 +1,101 @@
+{
+    "elements": [
+        {
+            "type": "CheckBox",
+            "name": "enabled",
+            "caption": "Charger control enabled",
+            "required": true
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "standbyBaseload",
+            "caption": "Standby Baseload (W)",
+            "minimum": 0,
+            "maximum": 16000
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "minSunPower",
+            "caption": "Minimum Sun Power (W)",
+            "minimum": 0,
+            "maximum": 5000
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "maxDischargePower",
+            "caption": "Battery max discharge power (W)",
+            "minimum": 0,
+            "maximum": 16000
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "minBatteryLevel",
+            "caption": "Minimum Battery Level (%)",
+            "minimum": 12,
+            "maximum": 100
+        },
+        {
+            "type": "Label",
+            "caption": "Warp2 Settings"
+        },
+        {
+            "type": "Label",
+            "caption": "Energie-Gateway"
+        },
+        {
+            "type": "SelectInstance",
+            "name": "energyGateway",
+            "caption": "Energy Gateway",
+            "required": false,
+            "validModules": ["{CF98BDC5-3B29-FAE1-DF05-9F058575C2C7}"]
+        },
+            {
+                "type": "SelectInstance",
+                "name": "warp2Gateway",
+                "caption": "Warp2 Gateway",
+                "required": false,
+                "validModules": ["{A3B1C2D3-4E5F-6789-ABCD-112233445566}"]
+            },
+        {
+            "type": "NumberSpinner",
+            "name": "minChargerCurrent",
+            "caption": "Min charger current (mA)",
+            "minimum": 1000,
+            "maximum": 32000
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "maxChargerCurrent",
+            "caption": "Max charger current (mA)",
+            "minimum": 1000,
+            "maximum": 32000
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "host",
+            "caption": "Host",
+            "required": true
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "user",
+            "caption": "User",
+            "required": false
+        },
+        {
+            "type": "PasswordTextBox",
+            "name": "password",
+            "caption": "Password",
+            "required": false
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "updateInterval",
+            "caption": "Update interval (s)",
+            "minimum": 0,
+            "maximum": 3600
+        }
+    ],
+    "actions": [],
+    "status": []
+}
