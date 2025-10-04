@@ -62,31 +62,6 @@
             "caption": "Max charger current (mA)",
             "minimum": 1000,
             "maximum": 32000
-        },
-        {
-            "type": "ValidationTextBox",
-            "name": "host",
-            "caption": "Host",
-            "required": true
-        },
-        {
-            "type": "ValidationTextBox",
-            "name": "user",
-            "caption": "User",
-            "required": false
-        },
-        {
-            "type": "PasswordTextBox",
-            "name": "password",
-            "caption": "Password",
-            "required": false
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "updateInterval",
-            "caption": "Update interval (s)",
-            "minimum": 0,
-            "maximum": 3600
         }
     ],
     "actions": [],

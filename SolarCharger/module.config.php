@@ -38,10 +38,6 @@ return [
             'type' => 'Integer',
             'default' => 0,
         ],
-        'updateInterval' => [
-            'type' => 'Integer',
-            'default' => 20,
-        ],
         'enabled' => [
             'type' => 'Boolean',
             'default' => true,
@@ -96,6 +92,13 @@ return [
             'name' => 'Import / Export',
             'profile' => 'SOLAR.Import',
             'position' => 6,
+            'enableAction' => false,
+        ],
+        'availablePower' => [
+            'type' => 'Float',
+            'name' => 'Available Power',
+            'profile' => 'SOLAR.ChargerPower',
+            'position' => 8,
             'enableAction' => false,
         ],
         'chargerMode' => [
@@ -219,11 +222,6 @@ return [
             'type' => 'String',
             'icon' => 'Information',
             'suffix' => '',
-        ],
-        'SOLAR.UpdateInterval' => [
-            'type' => 'Integer',
-            'icon' => 'Clock',
-            'suffix' => ' s',
         ],
         'SOLAR.YesNo' => [
             'type' => 'Boolean',

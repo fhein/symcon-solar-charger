@@ -30,6 +30,8 @@ class SolarCharger extends IPSModule
             $this->SetBuffer('houseConsumptionFallback', '');
             $this->SetBuffer('lastChargerState', '-1');
             $this->SetBuffer('chargerPowerSource', '');
+            $this->SetBuffer('warpHardwareMaxCurrent', '0');
+            $this->SetBuffer('effectiveMaxCurrent', '0');
         } catch (Exception $e) {
             $this->LogMessage(__CLASS__ . ': Error creating SolarCharger: ' . $e->getMessage(), KL_ERROR);
         }
@@ -92,7 +94,10 @@ class SolarCharger extends IPSModule
         // Normalize frequently used values to ints for consistency
         $chargerMode = (int)$this->GetValue('chargerMode');
         $hardwareMin = (int)$this->ReadPropertyInteger('minChargerCurrent');
-        $hardwareMax = (int)$this->ReadPropertyInteger('maxChargerCurrent');
+        $effectiveMax = max(0, $this->resolveEffectiveMaxCurrent());
+        if ($effectiveMax <= 0) {
+            $effectiveMax = (int)$this->ReadPropertyInteger('maxChargerCurrent');
+        }
 
         if ($chargerMode === 4) {
             $this->SetValue('maxChargerCurrent', 0);
@@ -108,11 +113,11 @@ class SolarCharger extends IPSModule
         switch ($chargerMode) {
             case 3:
                 // Manual mode uses the variable as fixed setpoint
-                $maxChargerCurrent = max($hardwareMin, min($hardwareMax, $maxChargerCurrent));
+                $maxChargerCurrent = max($hardwareMin, min($effectiveMax, $maxChargerCurrent));
                 break;
             default:
                 // Automatic modes: allow values down to 0 but keep within hardware max
-                $maxChargerCurrent = max(0, min($hardwareMax, $maxChargerCurrent));
+                $maxChargerCurrent = max(0, min($effectiveMax, $maxChargerCurrent));
                 break;
         }
 
@@ -126,7 +131,15 @@ class SolarCharger extends IPSModule
             try {
                 switch ($ident) {
                     case 'chargerSetCurrent':
-                        @IPS_RequestAction($gatewayId, 'target_current', (int)$value);
+                        $target = (int)$value;
+                        if ($effectiveMax > 0) {
+                            $target = min($target, $effectiveMax);
+                        }
+                        $target = max(0, $target);
+                        @IPS_RequestAction($gatewayId, 'target_current', $target);
+                        if ($target !== (int)$value) {
+                            $this->SetValue('chargerSetCurrent', $target);
+                        }
                         break;
                     case 'chargerUpdate':
                         if ((bool)$value) { @IPS_RequestAction($gatewayId, 'update_now', true); }
@@ -149,9 +162,17 @@ class SolarCharger extends IPSModule
         $useBattery = $chargerMode !== 0;
         $daytimeOnly = $chargerMode < 3;
 
+        $effectiveMax = max(0, $this->resolveEffectiveMaxCurrent());
+        if ($effectiveMax <= 0) {
+            $effectiveMax = (int)$this->ReadPropertyInteger('maxChargerCurrent');
+        }
+
         // Variable limits from variables (ints)
-    $maxChargerCurrent = (int)$this->GetValue('maxChargerCurrent');
-    $minChargerCurrent = ($chargerMode === 3) ? $maxChargerCurrent : 0;
+        $maxChargerCurrent = (int)$this->GetValue('maxChargerCurrent');
+        if ($effectiveMax > 0 && $maxChargerCurrent > $effectiveMax) {
+            $maxChargerCurrent = $effectiveMax;
+        }
+        $minChargerCurrent = ($chargerMode === 3) ? $maxChargerCurrent : 0;
 
         // Compute available power (W) from PV/battery/base loads
         $rawPower = (float)$production;
@@ -180,15 +201,17 @@ class SolarCharger extends IPSModule
 
         // Constrain by user settings
         $chargerCurrent = max($chargerCurrent, (int)$minChargerCurrent);
-        $chargerCurrent = min($chargerCurrent, (int)$maxChargerCurrent);
+        if ($maxChargerCurrent > 0) {
+            $chargerCurrent = min($chargerCurrent, (int)$maxChargerCurrent);
+        }
 
         // Constrain by charger capabilities (properties)
         $minAllowedCurrent = (int)$this->ReadPropertyInteger('minChargerCurrent');
         if ($chargerCurrent < $minAllowedCurrent) {
             $chargerCurrent = 0;
         }
-        $maxAllowedCurrent = (int)$this->ReadPropertyInteger('maxChargerCurrent');
-        if ($chargerCurrent > $maxAllowedCurrent) {
+        $maxAllowedCurrent = $effectiveMax > 0 ? $effectiveMax : (int)$this->ReadPropertyInteger('maxChargerCurrent');
+        if ($maxAllowedCurrent > 0 && $chargerCurrent > $maxAllowedCurrent) {
             $chargerCurrent = $maxAllowedCurrent;
         }
 
@@ -198,7 +221,7 @@ class SolarCharger extends IPSModule
         return [
             'chargerCurrent' => (int)$chargerCurrent,     // mA
             'chargerPower'   => (float)$chargerPowerW,    // W
-            'availablePower' => (float)($availablePower / 1000.0), // kW (kept for display/back-compat)
+            'availablePower' => (float)($availablePower / 1000.0), // kW (used for charging window logic/UI)
         ];
     }
 
@@ -258,6 +281,69 @@ class SolarCharger extends IPSModule
 
         $value = @GetValue($varId);
         return is_numeric($value) ? (int)$value : null;
+    }
+
+    private function getWarpHardwareMaxCurrent(): int
+    {
+        $bufferKey = 'warpHardwareMaxCurrent';
+        $cachedRaw = @$this->GetBuffer($bufferKey);
+        $cached = is_numeric($cachedRaw) ? (int)$cachedRaw : 0;
+
+        $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
+        if ($gatewayId <= 0 || !function_exists('WARP2_GetHardwareMaxCurrent')) {
+            return $cached;
+        }
+
+        try {
+            $value = @WARP2_GetHardwareMaxCurrent($gatewayId);
+            if (is_numeric($value)) {
+                $value = max(0, (int)$value);
+                if ((string)$value !== (string)$cachedRaw) {
+                    $this->SetBuffer($bufferKey, (string)$value);
+                    $this->SendDebug('SolarCharger', 'Warp hardware max current updated: ' . $value . ' mA', 0);
+                }
+                return $value;
+            }
+        } catch (Throwable $t) {
+            $this->SendDebug('SolarCharger', 'Warp hardware max query failed: ' . $t->getMessage(), 0);
+        }
+
+        return $cached;
+    }
+
+    private function resolveEffectiveMaxCurrent(): int
+    {
+        $configuredMax = max(0, (int)$this->ReadPropertyInteger('maxChargerCurrent'));
+        $hardwareMax = max(0, $this->getWarpHardwareMaxCurrent());
+
+        if ($hardwareMax > 0 && $configuredMax > 0) {
+            $effective = min($configuredMax, $hardwareMax);
+        } elseif ($hardwareMax > 0) {
+            $effective = $hardwareMax;
+        } else {
+            $effective = $configuredMax;
+        }
+
+        $bufferKey = 'effectiveMaxCurrent';
+        $previous = @$this->GetBuffer($bufferKey);
+        if ((string)$effective !== (string)$previous) {
+            $this->SetBuffer($bufferKey, (string)$effective);
+            if ($hardwareMax > 0 && $configuredMax > 0 && $hardwareMax < $configuredMax) {
+                $this->LogMessage(sprintf('Warp hardware limit (%d mA) caps configured maximum (%d mA).', $hardwareMax, $configuredMax), KL_NOTIFY);
+            }
+        }
+
+        if ($effective > 0) {
+            $varId = @$this->GetIDForIdent('maxChargerCurrent');
+            if ($varId !== false) {
+                $currentValue = (int)$this->GetValue('maxChargerCurrent');
+                if ($currentValue > $effective) {
+                    $this->SetValue('maxChargerCurrent', $effective);
+                }
+            }
+        }
+
+        return $effective;
     }
 
     private function updateChargerPowerSource(string $source): void
@@ -680,6 +766,9 @@ class SolarCharger extends IPSModule
         $values['consumption']          = $this->scaleToKw($data['production']['consumption']);
         $values['houseConsumption']     = $this->scaleToKw($data['house']['consumption']);
         $values['chargerPower']         = $this->scaleToKw($data['charger']['chargerPower']);
+        if (isset($data['charger']['availablePower'])) {
+            $values['availablePower']  = (float)$data['charger']['availablePower'];
+        }
 
         // Ensure integer current (mA) for variable
         $values['chargerCurrent']       = (int)$data['charger']['chargerCurrent'];
@@ -777,6 +866,12 @@ class SolarCharger extends IPSModule
         if ((int)$this->GetValue('chargerMode') === 4) {
             return 0;
         }
+
+        $effectiveMax = max(0, $this->resolveEffectiveMaxCurrent());
+        if ($effectiveMax > 0) {
+            $current = min($current, $effectiveMax);
+        }
+        $current = max(0, $current);
 
         // Forward to Warp2Gateway if configured
         $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
