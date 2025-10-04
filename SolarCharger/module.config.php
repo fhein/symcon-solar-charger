@@ -38,18 +38,6 @@ return [
             'type' => 'Integer',
             'default' => 0,
         ],
-        'host' => [
-            'type' => 'String',
-            'default' => 'http://192.168.11.51',
-        ],
-        'user' => [
-            'type' => 'String',
-            'default' => '',
-        ],
-        'password' => [
-            'type' => 'String',
-            'default' => '',
-        ],
         'updateInterval' => [
             'type' => 'Integer',
             'default' => 20,
@@ -98,7 +86,7 @@ return [
         ],
         'houseConsumption' => [
             'type' => 'Float',
-            'name' => 'House Consumption (no battery)',
+            'name' => 'House Consumption',
             'profile' => 'SOLAR.Consumption',
             'position' => 7,
             'enableAction' => false,
@@ -115,13 +103,6 @@ return [
             'name' => 'Charger Mode',
             'profile' => 'SOLAR.ChargerMode',
             'position' => 10,
-            'enableAction' => true,
-        ],
-        'minChargerCurrent' => [
-            'type' => 'Integer',
-            'name' => 'Charger Current (min)',
-            'profile' => 'SOLAR.CurrentMin',
-            'position' => 12,
             'enableAction' => true,
         ],
         'maxChargerCurrent' => [
@@ -282,36 +263,6 @@ return [
                     'value' => 16000, 
                     'text' => '11,0 kW', 
                     'icon' => 'HollowDoubleArrowDown',
-                    'color' => -1,
-                ],
-            ],
-        ],
-        'SOLAR.CurrentMin' => [
-            'type' => 'Integer',
-            'icon' => '',
-            'associations' => [
-                [ 
-                    'value' => 0, 
-                    'text' => '0,0 kW', 
-                    'icon' => 'Cross',
-                    'color' => -1,
-                ],
-                [ 
-                    'value' => 6000, 
-                    'text' => '4,1 kW', 
-                    'icon' => 'HollowArrowUp',
-                    'color' => -1,
-                ],
-                [ 
-                    'value' => 10870, 
-                    'text' => '7,5 kW', 
-                    'icon' => 'HollowArrowUp',
-                    'color' => -1,
-                ],
-                [ 
-                    'value' => 16000, 
-                    'text' => '11,0 kW', 
-                    'icon' => 'HollowDoubleArrowUp',
                     'color' => -1,
                 ],
             ],
