@@ -6,10 +6,6 @@ return [
             'type' => 'Integer',
             'default' => 0,
         ],
-        'warp2Gateway' => [
-            'type' => 'Integer',
-            'default' => 0,
-        ],
         'standbyBaseload' => [
             'type' => 'Integer',
             'default' => 300,
@@ -17,6 +13,10 @@ return [
         'minSunPower' => [
             'type' => 'Integer',
             'default' => 300,
+        ],
+        'daytimeSunDelayMinutes' => [
+            'type' => 'Integer',
+            'default' => 0,
         ],
         'maxDischargePower' => [
             'type' => 'Integer',
@@ -113,7 +113,7 @@ return [
         ],
         'maxChargerCurrent' => [
             'type' => 'Integer',
-            'name' => 'Charger Current (max)',
+            'name' => 'Charger Power (max)',
             'profile' => 'SOLAR.CurrentMax',
             'position' => 13,
             'default' => 16000,
@@ -122,16 +122,9 @@ return [
         'chargerCurrent' => [
             'type' => 'Integer',
             'name' => 'Charger Current',
-            'profile' => 'WARP2.ChargerCurrent',
+            'profile' => 'SOLAR.ChargerCurrent',
             'position' => 15,
             'enableAction' => false,
-        ],
-        'chargerSetCurrent' => [
-            'type' => 'Integer',
-            'name' => 'Set Charger Current',
-            'profile' => 'WARP2.ChargerCurrent',
-            'position' => 17,
-            'enableAction' => true,
         ],
         'chargerUpdate' => [
             'type' => 'Boolean',
@@ -197,6 +190,13 @@ return [
             'icon' => 'Graph',
             'suffix' => ' kW',
             'digits' => 1,
+        ],
+        'SOLAR.ChargerCurrent' => [
+            'type' => 'Integer',
+            'icon' => 'Electricity',
+            'suffix' => ' mA',
+            'minimum' => 0,
+            'maximum' => 32000,
         ],
         'SOLAR.Electricity' => [
             'type' => 'Float',

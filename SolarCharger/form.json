@@ -21,6 +21,13 @@
         },
         {
             "type": "NumberSpinner",
+            "name": "daytimeSunDelayMinutes",
+            "caption": "Daytime delay (minutes)",
+            "minimum": 0,
+            "maximum": 120
+        },
+        {
+            "type": "NumberSpinner",
             "name": "maxDischargePower",
             "caption": "Battery max discharge power (W)",
             "minimum": 0,
@@ -33,21 +40,26 @@
             "minimum": 12,
             "maximum": 100
         },
-        { "type": "Label", "caption": "Warp2 Settings" },
-        { "type": "Label", "caption": "Energie-Gateway" },
+        {
+            "type": "Label",
+            "caption": "Energie-Gateway"
+        },
         {
             "type": "SelectInstance",
             "name": "energyGateway",
-            "caption": "Energy Gateway",
+            "caption": "Energy Gateway (EnphaseGateway)",
             "required": false,
             "validModules": ["{CF98BDC5-3B29-FAE1-DF05-9F058575C2C7}"]
         },
         {
+            "type": "Label",
+            "caption": "Wallbox (WARP2 Gateway)"
+        },
+        {
             "type": "SelectInstance",
-            "name": "warp2Gateway",
-            "caption": "Warp2 Gateway",
-            "required": false,
-            "validModules": ["{A3B1C2D3-4E5F-6789-ABCD-112233445566}"]
+            "name": "targetCharger",
+            "caption": "Charger (Warp2Gateway)",
+            "required": false
         },
         {
             "type": "NumberSpinner",

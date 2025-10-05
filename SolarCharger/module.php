@@ -6,8 +6,7 @@ require_once __DIR__ . '/../libs/ModuleRegistration.php';
 
 class SolarCharger extends IPSModule
 {
-    protected $api = null; // kept for backward compatibility; not used for Warp2 anymore
-    protected $chargerModuleId = '{19D1EA3A-54AA-8EB2-A6B1-54530EF8A0F7}';
+    // GUID-based charger adapter removed – variables-only control
 
     public function __construct($InstanceID)
     {
@@ -21,17 +20,18 @@ class SolarCharger extends IPSModule
             $mr = new MaxenceModuleRegistration($this);
             $config = include __DIR__ . '/module.config.php';
             $mr->Register($config);
-            $this->SetBuffer('warpApiErrorCount', 0);
             $this->SetBuffer('chargingActive', '0');
             $this->SetBuffer('chargingStartCandidate', '0');
             $this->SetBuffer('chargingStopCandidate', '0');
             $this->SetBuffer('chargingMinOnUntil', '0');
             $this->SetBuffer('chargingMinOnStartSoc', '0');
             $this->SetBuffer('houseConsumptionFallback', '');
-            $this->SetBuffer('lastChargerState', '-1');
             $this->SetBuffer('chargerPowerSource', '');
-            $this->SetBuffer('warpHardwareMaxCurrent', '0');
             $this->SetBuffer('effectiveMaxCurrent', '0');
+            $this->SetBuffer('daytimeSunUnderSince', '0');
+            $this->SetBuffer('daytimeSunOverSince', '0');
+            $this->SetBuffer('daytimeState', 'inactive');
+            $this->SetBuffer('chargerRefreshAt', '0');
         } catch (Exception $e) {
             $this->LogMessage(__CLASS__ . ': Error creating SolarCharger: ' . $e->getMessage(), KL_ERROR);
         }
@@ -69,6 +69,7 @@ class SolarCharger extends IPSModule
             $this->SendDebug('SolarCharger', 'Cleanup minChargerCurrent failed: ' . $t->getMessage(), 0);
         }
         $this->ensureLocalizedVariableNames();
+        $this->resetDaytimeSunTracking();
         // Event-driven via ReceiveData
     }
 
@@ -134,6 +135,14 @@ class SolarCharger extends IPSModule
             $this->SetBuffer($maxCurrentBufferKey, '');
         }
 
+        if ($ident === 'chargerMode') {
+            if ($chargerMode === 2) {
+                $this->handleDaytimeModeSwitch();
+            } else {
+                $this->resetDaytimeSunTracking();
+            }
+        }
+
         $this->LogMessage("RequestAction: {$ident} = {$value}", KL_NOTIFY);
         $this->LogMessage("1 -> chargerMode: {$chargerMode}, maxChargerCurrent: {$maxChargerCurrent}", KL_NOTIFY);
 
@@ -144,16 +153,7 @@ class SolarCharger extends IPSModule
 
             $this->SetValue('maxChargerCurrent', 0);
 
-            if ($ident === 'chargerSetCurrent') {
-                $target = (int)$value;
-                if ($effectiveMax > 0) {
-                    $target = min($target, $effectiveMax);
-                }
-                $target = max(0, $target);
-                if ($target !== (int)$value) {
-                    $this->SetValue('chargerSetCurrent', $target);
-                }
-            } elseif ($ident === 'chargerMode') {
+            if ($ident === 'chargerMode') {
                 $this->SetChargerCurrent(0, true);
                 $this->LogMessage('Charger mode set to OFF. Charging stopped.', KL_NOTIFY);
             } elseif ($ident === 'chargerUpdate' || $ident === 'chargerReboot') {
@@ -178,34 +178,29 @@ class SolarCharger extends IPSModule
 
         $this->LogMessage("2 -> chargerMode: {$chargerMode}, maxChargerCurrent: {$maxChargerCurrent}", KL_NOTIFY);
 
-        // Passthrough actions to Warp2Gateway
-        $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
-        if ($gatewayId > 0) {
-            try {
-                switch ($ident) {
-                    case 'chargerSetCurrent':
-                        $target = (int)$value;
-                        if ($effectiveMax > 0) {
-                            $target = min($target, $effectiveMax);
-                        }
-                        $target = max(0, $target);
-                        if ($target !== (int)$value) {
-                            $this->SetValue('chargerSetCurrent', $target);
-                        }
-                        @IPS_RequestAction($gatewayId, 'target_current', $target);
-                        break;
-                    case 'chargerUpdate':
-                        if ((bool)$value) { @IPS_RequestAction($gatewayId, 'update_now', true); }
-                        $this->SetValue('chargerUpdate', false);
-                        break;
-                    case 'chargerReboot':
-                        if ((bool)$value) { @IPS_RequestAction($gatewayId, 'reboot', true); }
-                        $this->SetValue('chargerReboot', false);
-                        break;
+        $targetCurrent = null;
+
+    // Sende Kommandos immer – ausschließlich variablenbasierte Steuerung
+        switch ($ident) {
+            // no direct set-current via UI variable anymore
+            case 'chargerUpdate':
+                if ((bool)$value) {
+                    $this->sendChargerCommand([
+                        'command'     => 'refresh',
+                        'requested_at' => time(),
+                        'reason'      => 'manual',
+                    ]);
                 }
-            } catch (Exception $e) {
-                $this->LogMessage('Warp2 passthrough action failed: ' . $e->getMessage(), KL_ERROR);
-            }
+                $this->SetValue('chargerUpdate', false);
+                break;
+            case 'chargerReboot':
+                if ((bool)$value) {
+                    $this->sendChargerCommand([
+                        'command' => 'reboot',
+                    ]);
+                }
+                $this->SetValue('chargerReboot', false);
+                break;
         }
     }
 
@@ -213,7 +208,9 @@ class SolarCharger extends IPSModule
         // Read mode and constraints (as ints where appropriate)
         $chargerMode = (int)$this->GetValue('chargerMode');
         $useBattery = $chargerMode !== 0;
-        $daytimeOnly = $chargerMode < 3;
+        $isDaytimeFixed = ($chargerMode === 2);
+        $isFixedMode = ($chargerMode === 3);
+        $daytimeOnly = in_array($chargerMode, [0, 1], true);
 
         $effectiveMax = max(0, $this->resolveEffectiveMaxCurrent());
         if ($effectiveMax <= 0) {
@@ -225,7 +222,7 @@ class SolarCharger extends IPSModule
         if ($effectiveMax > 0 && $maxChargerCurrent > $effectiveMax) {
             $maxChargerCurrent = $effectiveMax;
         }
-        $minChargerCurrent = ($chargerMode === 3) ? $maxChargerCurrent : 0;
+    $minChargerCurrent = $isFixedMode ? $maxChargerCurrent : 0;
 
         // Compute available power (W) from PV/battery/base loads
         $rawPower = (float)$production;
@@ -247,7 +244,15 @@ class SolarCharger extends IPSModule
         $chargerCurrent = (int) round($availablePower / 3.0 / 230.0 * 1000.0, 0);
 
         // Daytime-only: require min sun power
-        if ($daytimeOnly && $production < $minSunPower) {
+        if ($isDaytimeFixed) {
+            if ($production < $minSunPower) {
+                $availablePower = 0.0;
+                $maxChargerCurrent = 0;
+                $minChargerCurrent = 0;
+            } else {
+                $minChargerCurrent = $maxChargerCurrent;
+            }
+        } elseif ($daytimeOnly && $production < $minSunPower) {
             $availablePower = 0.0;
             $maxChargerCurrent = 0;
         }
@@ -278,6 +283,304 @@ class SolarCharger extends IPSModule
         ];
     }
 
+    private function getDaytimeSunDelaySeconds(): int
+    {
+        $minutes = (int)$this->ReadPropertyInteger('daytimeSunDelayMinutes');
+        if ($minutes <= 0) {
+            return 0;
+        }
+        return max(0, $minutes) * 60;
+    }
+
+    private function resetDaytimeSunTracking(): void
+    {
+        $this->SetBuffer('daytimeSunUnderSince', '0');
+        $this->SetBuffer('daytimeSunOverSince', '0');
+        $this->SetBuffer('daytimeState', 'inactive');
+    }
+
+    private function handleDaytimeModeSwitch(): void
+    {
+        $this->resetDaytimeSunTracking();
+
+        $minSunPower = (float)$this->ReadPropertyInteger('minSunPower');
+        $delaySeconds = $this->getDaytimeSunDelaySeconds();
+
+        try {
+            $productionKw = (float)$this->GetValue('production');
+        } catch (Throwable $t) {
+            $productionKw = 0.0;
+        }
+        $productionW = $productionKw * 1000.0;
+
+        if ($productionW >= $minSunPower) {
+            $this->SetBuffer('daytimeState', 'active');
+            $this->SetBuffer('daytimeSunUnderSince', '0');
+            $this->SetBuffer('daytimeSunOverSince', '0');
+            $this->SendDebug('SolarCharger', sprintf('Daytime mode activated immediately (production %.1f W ≥ %.1f W).', $productionW, $minSunPower), 0);
+
+            $maxChargerCurrent = (int)$this->GetValue('maxChargerCurrent');
+            if ($maxChargerCurrent <= 0) {
+                $maxChargerCurrent = (int)$this->ReadPropertyInteger('maxChargerCurrent');
+            }
+            $hardwareMin = (int)$this->ReadPropertyInteger('minChargerCurrent');
+            if ($maxChargerCurrent < $hardwareMin) {
+                $maxChargerCurrent = $hardwareMin;
+            }
+            $effectiveMax = max(0, $this->resolveEffectiveMaxCurrent());
+            if ($effectiveMax > 0) {
+                $maxChargerCurrent = min($maxChargerCurrent, $effectiveMax);
+            }
+            if ($maxChargerCurrent > 0) {
+                $this->SetChargerCurrent($maxChargerCurrent, true);
+            }
+        } else {
+            if ($delaySeconds > 0) {
+                $this->SetBuffer('daytimeSunUnderSince', (string)time());
+                $this->SendDebug('SolarCharger', sprintf('Daytime mode waiting for sun (production %.1f W < %.1f W).', $productionW, $minSunPower), 0);
+            } else {
+                $this->SendDebug('SolarCharger', sprintf('Daytime mode inactive (production %.1f W < %.1f W).', $productionW, $minSunPower), 0);
+            }
+        }
+    }
+
+    private function evaluateDaytimeMode(float $productionW): bool
+    {
+        $minSunPower = (float)$this->ReadPropertyInteger('minSunPower');
+        $delaySeconds = $this->getDaytimeSunDelaySeconds();
+        $now = time();
+
+        $state = $this->GetBuffer('daytimeState');
+        if ($state === '') {
+            $state = 'inactive';
+        }
+        $overSince = (int)$this->GetBuffer('daytimeSunOverSince');
+        $underSince = (int)$this->GetBuffer('daytimeSunUnderSince');
+
+        if ($productionW >= $minSunPower) {
+            $this->SetBuffer('daytimeSunUnderSince', '0');
+
+            if ($delaySeconds === 0) {
+                if ($state !== 'active') {
+                    $this->SendDebug('SolarCharger', sprintf('Daytime sun sufficient (%.1f W ≥ %.1f W).', $productionW, $minSunPower), 0);
+                }
+                $this->SetBuffer('daytimeSunOverSince', '0');
+                $this->SetBuffer('daytimeState', 'active');
+                return true;
+            }
+
+            if ($state === 'active') {
+                return true;
+            }
+
+            if ($overSince === 0) {
+                $this->SetBuffer('daytimeSunOverSince', (string)$now);
+                if ($state !== 'waitingOn') {
+                    $this->SetBuffer('daytimeState', 'waitingOn');
+                    $this->SendDebug('SolarCharger', sprintf('Daytime activation pending (%.1f W ≥ %.1f W).', $productionW, $minSunPower), 0);
+                }
+                return false;
+            }
+
+            if (($now - $overSince) >= $delaySeconds) {
+                $this->SetBuffer('daytimeSunOverSince', '0');
+                $this->SetBuffer('daytimeState', 'active');
+                $this->SendDebug('SolarCharger', sprintf('Daytime activation after %.0f s of sufficient sun.', (float)($now - $overSince)), 0);
+                return true;
+            }
+
+            return false;
+        }
+
+        $this->SetBuffer('daytimeSunOverSince', '0');
+
+        if ($delaySeconds === 0) {
+            if ($state !== 'inactive') {
+                $this->SendDebug('SolarCharger', sprintf('Daytime sun insufficient (%.1f W < %.1f W).', $productionW, $minSunPower), 0);
+            }
+            $this->SetBuffer('daytimeState', 'inactive');
+            return false;
+        }
+
+        if ($state === 'active' || $state === 'waitingOff') {
+            if ($underSince === 0) {
+                $this->SetBuffer('daytimeSunUnderSince', (string)$now);
+                if ($state !== 'waitingOff') {
+                    $this->SetBuffer('daytimeState', 'waitingOff');
+                    $this->SendDebug('SolarCharger', sprintf('Daytime deactivation pending (%.1f W < %.1f W).', $productionW, $minSunPower), 0);
+                }
+                return true;
+            }
+
+            if (($now - $underSince) >= $delaySeconds) {
+                $this->SetBuffer('daytimeSunUnderSince', '0');
+                $this->SetBuffer('daytimeState', 'inactive');
+                $this->SendDebug('SolarCharger', sprintf('Daytime stop after %.0f s of insufficient sun.', (float)($now - $underSince)), 0);
+                return false;
+            }
+
+            $this->SetBuffer('daytimeState', 'waitingOff');
+            return true;
+        }
+
+        if ($underSince === 0) {
+            $this->SetBuffer('daytimeSunUnderSince', (string)$now);
+        }
+        if ($state !== 'inactive') {
+            $this->SetBuffer('daytimeState', 'inactive');
+        }
+        return false;
+    }
+
+    // Parent/Child-Kopplung entfällt: Vorhaltefunktion liefert immer false
+    private function hasChargerAdapter(): bool { return false; }
+
+    private function sendChargerCommand(array $data): void
+    {
+        // Einziger Modus: Steuerung ausschließlich über Variablen auf der Ziel-Instanz
+        $this->controlChargerViaVariables($data);
+    }
+
+    private function triggerChargerRefresh(): void
+    {
+        $now = time();
+        $allowedAt = (int)$this->GetBuffer('chargerRefreshAt');
+        if ($allowedAt !== 0 && $now < $allowedAt) {
+            return;
+        }
+
+        $this->SetBuffer('chargerRefreshAt', (string)($now + 5));
+        $this->sendChargerCommand([
+            'command'      => 'refresh',
+            'requested_at' => $now,
+        ]);
+        $this->SendDebug('SolarCharger', 'Requested charger telemetry refresh via variables.', 0);
+    }
+
+    private function controlChargerViaVariables(array $command): bool
+    {
+        $targetId = $this->getTargetChargerInstanceId();
+        if ($targetId <= 0) {
+            // No viable target found – make it visible why nothing will be written
+            $this->SendDebug('SolarCharger', 'controlChargerViaVariables: no target charger available (configure targetCharger or ensure exactly one Warp2 instance exists).', 0);
+            return false;
+        }
+        $this->SendDebug('SolarCharger', sprintf('controlChargerViaVariables: using targetCharger instance #%d', $targetId), 0);
+        if (!IPS_InstanceExists($targetId)) {
+            $this->SendDebug('SolarCharger', sprintf('controlChargerViaVariables: targetCharger instance #%d does not exist', $targetId), 0);
+            return false;
+        }
+
+        $cmd = strtolower((string)($command['command'] ?? ''));
+        $this->SendDebug('SolarCharger', sprintf('controlChargerViaVariables: cmd=%s, targetCharger=%d', $cmd, $targetId), 0);
+        switch ($cmd) {
+            case 'set_current':
+                $current = isset($command['current_ma']) && is_numeric($command['current_ma']) ? (int)$command['current_ma'] : null;
+                if ($current === null) {
+                    $this->SendDebug('SolarCharger', 'controlChargerViaVariables: set_current without numeric current_ma', 0);
+                    return false;
+                }
+                $written = $this->setInstanceInteger($targetId, 'mxccmd_target_current', $current);
+                if ($written) {
+                    $this->SendDebug('SolarCharger', sprintf('controlChargerViaVariables: wrote mxccmd_target_current=%d to instance #%d', $current, $targetId), 0);
+                } else {
+                    $this->SendDebug('SolarCharger', sprintf('controlChargerViaVariables: mxccmd_target_current not found on instance #%d, trying legacy target_current', $targetId), 0);
+                    $legacyWritten = $this->setInstanceInteger($targetId, 'target_current', $current);
+                    if ($legacyWritten) {
+                        $this->SendDebug('SolarCharger', sprintf('controlChargerViaVariables: wrote target_current=%d to instance #%d', $current, $targetId), 0);
+                    } else {
+                        $this->SendDebug('SolarCharger', sprintf('controlChargerViaVariables: target_current also not found on instance #%d', $targetId), 0);
+                    }
+                }
+                // Sofort anwenden, um "Warte auf Freigabe"/Blockade zu vermeiden
+                $this->triggerInstanceAction($targetId, 'mxccmd_apply_now');
+                return true;
+            case 'refresh':
+                $this->triggerInstanceAction($targetId, 'mxccmd_refresh');
+                return true;
+            case 'reboot':
+                $this->triggerInstanceAction($targetId, 'mxccmd_reboot');
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Resolve a usable target charger instance:
+    // 1) If the property 'targetCharger' is set (>0) and the instance exists, use it
+    // 2) Otherwise, auto-detect: if exactly one Warp2Gateway instance exists, use that
+    // 3) Else, return 0 (no target)
+    private function getTargetChargerInstanceId(): int
+    {
+        $configured = (int)$this->ReadPropertyInteger('targetCharger');
+        if ($configured > 0 && IPS_InstanceExists($configured)) {
+            return $configured;
+        }
+
+        // Auto-detect Warp2Gateway instance by ModuleID
+        $warp2ModuleId = '{A3B1C2D3-4E5F-6789-ABCD-112233445566}';
+        try {
+            $instances = @IPS_GetInstanceListByModuleID($warp2ModuleId);
+            if (is_array($instances) && count($instances) === 1) {
+                return (int)$instances[0];
+            }
+            if (is_array($instances)) {
+                $this->SendDebug('SolarCharger', sprintf('Auto-detect Warp2 instances: found %d; unable to select uniquely.', count($instances)), 0);
+            }
+        } catch (Throwable $t) {
+            $this->SendDebug('SolarCharger', 'Auto-detect Warp2 instance failed: ' . $t->getMessage(), 0);
+        }
+
+        return 0;
+    }
+
+    private function setInstanceInteger(int $instanceId, string $ident, int $value): bool
+    {
+        $varId = @IPS_GetObjectIDByIdent($ident, $instanceId);
+        if (!is_int($varId)) {
+            $this->SendDebug('SolarCharger', sprintf('setInstanceInteger: ident %s not found on instance #%d', $ident, $instanceId), 0);
+            return false;
+        }
+
+        // Prefer RequestAction if the variable has an action handler; else fall back to direct SetValue
+        try {
+            $obj = @IPS_GetObject($varId);
+            $hasAction = is_array($obj) && isset($obj['ObjectType']) && ($obj['ObjectType'] === 2) && isset($obj['ObjectActionID']) && ((int)$obj['ObjectActionID'] > 0);
+        } catch (Throwable $t) {
+            $hasAction = false;
+        }
+
+        if ($hasAction) {
+            try {
+                @IPS_RequestAction($instanceId, $ident, $value);
+                return true;
+            } catch (Throwable $t) {
+                $this->SendDebug('SolarCharger', sprintf('setInstanceInteger: RequestAction failed for %s on #%d: %s', $ident, $instanceId, $t->getMessage()), 0);
+                // fall through to SetValue below
+            }
+        }
+
+        try {
+            @SetValueInteger($varId, $value);
+            return true;
+        } catch (Throwable $t) {
+            $this->SendDebug('SolarCharger', sprintf('setInstanceInteger: SetValue failed for %s on #%d: %s', $ident, $instanceId, $t->getMessage()), 0);
+            return false;
+        }
+    }
+
+    private function triggerInstanceAction(int $instanceId, string $ident): void
+    {
+        try {
+            @IPS_RequestAction($instanceId, $ident, true);
+        } catch (Throwable $t) {
+            $this->SendDebug('SolarCharger', sprintf('Trigger action failed for %s on #%d: %s', $ident, $instanceId, $t->getMessage()), 0);
+        }
+    }
+
+    // Telemetry via GUID interface removed – rely on variables on the target Warp2Gateway
+    // updateChargerTelemetry/extractHardwareMaxCurrent/getChargerTelemetry/isTelemetryFresh/ForwardData removed
+
     protected function resolveActualChargerPower(int $chargerCurrent, float $estimatedPower): float
     {
         if ($chargerCurrent <= 0) {
@@ -285,89 +588,39 @@ class SolarCharger extends IPSModule
             return 0.0;
         }
 
-        $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
-        if ($gatewayId <= 0) {
-            $this->updateChargerPowerSource('estimate');
-            return $estimatedPower;
-        }
-
-        if (!function_exists('WARP2_GetMeterState') || !function_exists('WARP2_GetMeterValues')) {
-            $this->updateChargerPowerSource('estimate');
-            return $estimatedPower;
-        }
-
-        try {
-            $state = @WARP2_GetMeterState($gatewayId);
-            if (!is_array($state) || (int)($state['state'] ?? 0) === 0) {
-                $this->updateChargerPowerSource('estimate');
-                return $estimatedPower;
-            }
-
-            $values = @WARP2_GetMeterValues($gatewayId);
-            if (is_array($values) && isset($values['power']) && is_numeric($values['power'])) {
-                $power = (float)$values['power'];
-                if ($power < 0) {
-                    $power = 0.0;
+        // Prefer real power from target Warp2 instance variable 'charger_power'
+        $targetId = $this->getTargetChargerInstanceId();
+        if ($targetId > 0 && IPS_InstanceExists($targetId)) {
+            $varId = @IPS_GetObjectIDByIdent('charger_power', $targetId);
+            if (is_int($varId)) {
+                try {
+                    $value = @GetValueFloat($varId);
+                    if (is_numeric($value) && $value > 0) {
+                        $this->updateChargerPowerSource('warp2');
+                        return (float)$value;
+                    }
+                } catch (Throwable $t) {
+                    // ignore and fall back
                 }
-                $this->updateChargerPowerSource('meter');
-                return $power;
             }
-        } catch (Throwable $t) {
-            $this->SendDebug('SolarCharger', 'Meter query failed: ' . $t->getMessage(), 0);
         }
 
         $this->updateChargerPowerSource('estimate');
         return $estimatedPower;
     }
 
-    protected function getWarpChargerState(): ?int
-    {
-        $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
-        if ($gatewayId <= 0) {
-            return null;
-        }
-
-        $varId = @IPS_GetObjectIDByIdent('charger_state', $gatewayId);
-        if ($varId === false || !IPS_VariableExists($varId)) {
-            return null;
-        }
-
-        $value = @GetValue($varId);
-        return is_numeric($value) ? (int)$value : null;
-    }
-
-    private function getWarpHardwareMaxCurrent(): int
-    {
-        $bufferKey = 'warpHardwareMaxCurrent';
-        $cachedRaw = @$this->GetBuffer($bufferKey);
-        $cached = is_numeric($cachedRaw) ? (int)$cachedRaw : 0;
-
-        $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
-        if ($gatewayId <= 0 || !function_exists('WARP2_GetHardwareMaxCurrent')) {
-            return $cached;
-        }
-
-        try {
-            $value = @WARP2_GetHardwareMaxCurrent($gatewayId);
-            if (is_numeric($value)) {
-                $value = max(0, (int)$value);
-                if ((string)$value !== (string)$cachedRaw) {
-                    $this->SetBuffer($bufferKey, (string)$value);
-                    $this->SendDebug('SolarCharger', 'Warp hardware max current updated: ' . $value . ' mA', 0);
-                }
-                return $value;
-            }
-        } catch (Throwable $t) {
-            $this->SendDebug('SolarCharger', 'Warp hardware max query failed: ' . $t->getMessage(), 0);
-        }
-
-        return $cached;
-    }
-
     private function resolveEffectiveMaxCurrent(): int
     {
         $configuredMax = max(0, (int)$this->ReadPropertyInteger('maxChargerCurrent'));
-        $hardwareMax = max(0, $this->getWarpHardwareMaxCurrent());
+        // Variables-only: fetch hardware max via target Warp2 instance if available
+        $hardwareMax = 0;
+        $targetId = $this->getTargetChargerInstanceId();
+        if ($targetId > 0 && IPS_InstanceExists($targetId)) {
+            $varId = @IPS_GetObjectIDByIdent('hardware_max_current', $targetId);
+            if (is_int($varId)) {
+                try { $hardwareMax = max(0, (int)@GetValueInteger($varId)); } catch (Throwable $t) { $hardwareMax = 0; }
+            }
+        }
 
         if ($hardwareMax > 0 && $configuredMax > 0) {
             $effective = min($configuredMax, $hardwareMax);
@@ -382,7 +635,10 @@ class SolarCharger extends IPSModule
         if ((string)$effective !== (string)$previous) {
             $this->SetBuffer($bufferKey, (string)$effective);
             if ($hardwareMax > 0 && $configuredMax > 0 && $hardwareMax < $configuredMax) {
-                $this->LogMessage(sprintf('Warp hardware limit (%d mA) caps configured maximum (%d mA).', $hardwareMax, $configuredMax), KL_NOTIFY);
+                $this->LogMessage(
+                    sprintf('Charger hardware limit (%d mA) caps configured maximum (%d mA).', $hardwareMax, $configuredMax),
+                    KL_NOTIFY
+                );
             }
         }
 
@@ -410,14 +666,11 @@ class SolarCharger extends IPSModule
         $this->SetBuffer($bufferKey, $source);
 
         switch ($source) {
-            case 'meter':
-                $message = 'Charger power now uses Warp meter readings.';
-                break;
             case 'idle':
                 $message = 'Charger power reset to idle (no current requested).';
                 break;
-            case 'waiting':
-                $message = 'Charger power held at zero (charger not actively charging).';
+            case 'warp2':
+                $message = 'Charger power now uses Warp2 wallbox variable.';
                 break;
             default:
                 $message = 'Charger power falls back to estimation from target current.';
@@ -865,13 +1118,20 @@ class SolarCharger extends IPSModule
         $batteryFlowKw    = is_numeric($batteryFlowW) ? ((float)$batteryFlowW / 1000.0) : 0.0;
         $batteryLevel     = isset($batteryData['level']) ? (float)$batteryData['level'] : 0.0;
 
-        $allowCharging = $this->manageChargingWindow(
-            $chargerMode,
-            $availablePowerKw,
-            $importPowerKw,
-            $batteryFlowKw,
-            $batteryLevel
-        );
+        if ($chargerMode === 2) {
+            $allowCharging = $this->evaluateDaytimeMode((float)$productionData['production']);
+        } else {
+            if ($this->GetBuffer('daytimeState') !== 'inactive') {
+                $this->resetDaytimeSunTracking();
+            }
+            $allowCharging = $this->manageChargingWindow(
+                $chargerMode,
+                $availablePowerKw,
+                $importPowerKw,
+                $batteryFlowKw,
+                $batteryLevel
+            );
+        }
 
         $finalCurrent = $allowCharging ? (int)$chargerData['chargerCurrent'] : 0;
         $estimatedPower = (float)$chargerData['chargerPower'];
@@ -880,16 +1140,6 @@ class SolarCharger extends IPSModule
         } else {
             $finalPower = 0.0;
             $this->updateChargerPowerSource('idle');
-        }
-
-        $chargerState = $this->getWarpChargerState();
-        if ($chargerState !== null && $chargerState !== 3) {
-            $finalPower = 0.0;
-            if ($finalCurrent > 0) {
-                $this->updateChargerPowerSource('waiting');
-            } else {
-                $this->updateChargerPowerSource('idle');
-            }
         }
 
         $chargerData['chargerCurrent'] = $finalCurrent;
@@ -904,9 +1154,18 @@ class SolarCharger extends IPSModule
         if ($totalConsumptionW !== null) {
             if ($chargerPowerW >= $chargerThresholdW) {
                 $candidate = $totalConsumptionW - $chargerPowerW;
-                if ($candidate < -$chargerThresholdW && $rawHouseConsumptionW !== null) {
-                    $netHouseConsumptionW = max(0.0, $rawHouseConsumptionW);
-                    $this->SendDebug('SolarCharger', sprintf('Net house fallback to raw (total %.1f W, charger %.1f W, raw %.1f W).', $totalConsumptionW, $chargerPowerW, $rawHouseConsumptionW), 0);
+                if ($candidate < -$chargerThresholdW) {
+                    $rawMinusCharger = ($rawHouseConsumptionW !== null) ? ($rawHouseConsumptionW - $chargerPowerW) : null;
+                    if ($rawMinusCharger !== null && $rawMinusCharger >= -$chargerThresholdW) {
+                        $netHouseConsumptionW = max(0.0, $rawMinusCharger);
+                        $this->SendDebug('SolarCharger', sprintf('Net house derived from raw minus charger (total %.1f W, charger %.1f W, raw %.1f W).', $totalConsumptionW, $chargerPowerW, $rawHouseConsumptionW), 0);
+                    } elseif ($rawHouseConsumptionW !== null) {
+                        $netHouseConsumptionW = max(0.0, $rawHouseConsumptionW);
+                        $this->SendDebug('SolarCharger', sprintf('Net house fallback to raw (total %.1f W, charger %.1f W, raw %.1f W).', $totalConsumptionW, $chargerPowerW, $rawHouseConsumptionW), 0);
+                    } else {
+                        $netHouseConsumptionW = 0.0;
+                        $this->SendDebug('SolarCharger', sprintf('Net house fallback to zero (total %.1f W, charger %.1f W).', $totalConsumptionW, $chargerPowerW), 0);
+                    }
                 } else {
                     $netHouseConsumptionW = max(0.0, $candidate);
                 }
@@ -949,28 +1208,34 @@ class SolarCharger extends IPSModule
         }
         $current = max(0, $current);
 
-        $previous = (int)$this->GetValue('chargerSetCurrent');
+        $previousRaw = $this->GetBuffer('lastSetCurrent');
+        $previous = is_numeric($previousRaw) ? (int)$previousRaw : -1;
         if ($previous !== $current) {
-            $this->SetValue('chargerSetCurrent', $current);
+            $this->SetBuffer('lastSetCurrent', (string)$current);
         }
 
-        $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
-        if ($gatewayId <= 0) {
-            $this->LogMessage('SetChargerCurrent: No Warp2Gateway configured.', KL_WARNING);
-            return $current;
-        }
+        // Kein Abbruch mehr bei fehlender Kopplung – variablenbasierte Steuerung übernimmt
 
         if ($previous === $current && !$force) {
             return $current;
         }
 
-        try {
-            @IPS_RequestAction($gatewayId, 'target_current', $current);
-            return $current;
-        } catch (Exception $e) {
-            $this->LogMessage('SetChargerCurrent failed: ' . $e->getMessage(), KL_ERROR);
-            return $current;
+        $payload = [
+            'command'    => 'set_current',
+            'current_ma' => $current,
+        ];
+        if ($force) {
+            $payload['force'] = true;
         }
+        if ($effectiveMax > 0) {
+            $payload['max_current_ma'] = $effectiveMax;
+        }
+        $hardwareMin = max(0, (int)$this->ReadPropertyInteger('minChargerCurrent'));
+        if ($hardwareMin > 0) {
+            $payload['min_current_ma'] = $hardwareMin;
+        }
+        $this->sendChargerCommand($payload);
+        return $current;
     }
 
     private function connectToInterfaceParent(string $interfaceGuid): void
@@ -994,4 +1259,6 @@ class SolarCharger extends IPSModule
         }
         $this->LogMessage('ApplyChanges: no parent instance implementing neutral energy interface found.', KL_WARNING);
     }
+
+    // Adapter coupling fully removed
 }

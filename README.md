@@ -1,6 +1,6 @@
 # symcon-solar-charger
 
-IP-Symcon Modul zur solargestützten Steuerung einer WARP2-Ladestation auf Basis eines neutralen Energie-Gateways (z. B. Enphase).
+IP-Symcon Modul zur solargestützten Steuerung von Ladeinfrastruktur über das neutrale Adapterprotokoll `com.maxence.charger.v1` auf Basis eines Energie-Gateways (z. B. Enphase).
 
 - Library: `maxence` (library.json)
 - Modul: `SolarCharger`
