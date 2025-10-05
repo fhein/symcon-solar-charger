@@ -96,9 +96,12 @@ return [
         ],
         'availablePower' => [
             'type' => 'Float',
-            'name' => 'Available Power',
+            'name' => 'Verfügbare Leistung',
             'profile' => 'SOLAR.ChargerPower',
             'position' => 8,
+            'translations' => [
+                'en' => 'Available Power',
+            ],
             'enableAction' => false,
         ],
         'chargerMode' => [

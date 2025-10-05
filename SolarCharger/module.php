@@ -35,6 +35,7 @@ class SolarCharger extends IPSModule
         } catch (Exception $e) {
             $this->LogMessage(__CLASS__ . ': Error creating SolarCharger: ' . $e->getMessage(), KL_ERROR);
         }
+        $this->ensureLocalizedVariableNames();
     }
 
     public function Destroy() {
@@ -67,7 +68,28 @@ class SolarCharger extends IPSModule
         } catch (Throwable $t) {
             $this->SendDebug('SolarCharger', 'Cleanup minChargerCurrent failed: ' . $t->getMessage(), 0);
         }
+        $this->ensureLocalizedVariableNames();
         // Event-driven via ReceiveData
+    }
+
+    private function ensureLocalizedVariableNames(): void
+    {
+        $this->renameVariableIfMatching('availablePower', 'Verfügbare Leistung', ['Available Power']);
+    }
+
+    private function renameVariableIfMatching(string $ident, string $desiredName, array $oldNames = []): void
+    {
+        $varId = @$this->GetIDForIdent($ident);
+        if ($varId === false || !IPS_VariableExists($varId)) {
+            return;
+        }
+        $currentName = IPS_GetName($varId);
+        if ($currentName === $desiredName) {
+            return;
+        }
+        if ($currentName === '' || in_array($currentName, $oldNames, true)) {
+            IPS_SetName($varId, $desiredName);
+        }
     }
 
     protected function getBatteryDataFromEnergy(array $battery): array
@@ -99,16 +121,47 @@ class SolarCharger extends IPSModule
             $effectiveMax = (int)$this->ReadPropertyInteger('maxChargerCurrent');
         }
 
-        if ($chargerMode === 4) {
-            $this->SetValue('maxChargerCurrent', 0);
-            $this->LogMessage('Charger mode set to OFF. Skipping update.', KL_NOTIFY);
-            return;
-        }
-
         $maxChargerCurrent = (int)$this->GetValue('maxChargerCurrent');
+        $maxCurrentBufferKey = 'maxCurrentBeforeOff';
+        $storedMaxRaw = $this->GetBuffer($maxCurrentBufferKey);
+        $storedMaxCurrent = ($storedMaxRaw !== '') ? (int)$storedMaxRaw : null;
+
+        if ($chargerMode !== 4 && $ident === 'chargerMode') {
+            if ($storedMaxCurrent !== null && $maxChargerCurrent <= 0) {
+                $maxChargerCurrent = $storedMaxCurrent;
+                $this->SetValue('maxChargerCurrent', $maxChargerCurrent);
+            }
+            $this->SetBuffer($maxCurrentBufferKey, '');
+        }
 
         $this->LogMessage("RequestAction: {$ident} = {$value}", KL_NOTIFY);
         $this->LogMessage("1 -> chargerMode: {$chargerMode}, maxChargerCurrent: {$maxChargerCurrent}", KL_NOTIFY);
+
+        if ($chargerMode === 4) {
+            if ($ident === 'chargerMode' && $maxChargerCurrent > 0) {
+                $this->SetBuffer($maxCurrentBufferKey, (string)$maxChargerCurrent);
+            }
+
+            $this->SetValue('maxChargerCurrent', 0);
+
+            if ($ident === 'chargerSetCurrent') {
+                $target = (int)$value;
+                if ($effectiveMax > 0) {
+                    $target = min($target, $effectiveMax);
+                }
+                $target = max(0, $target);
+                if ($target !== (int)$value) {
+                    $this->SetValue('chargerSetCurrent', $target);
+                }
+            } elseif ($ident === 'chargerMode') {
+                $this->SetChargerCurrent(0, true);
+                $this->LogMessage('Charger mode set to OFF. Charging stopped.', KL_NOTIFY);
+            } elseif ($ident === 'chargerUpdate' || $ident === 'chargerReboot') {
+                $this->SetValue($ident, false);
+            }
+            $this->LogMessage('Charger mode OFF -> max current display reset to 0.', KL_NOTIFY);
+            return;
+        }
 
         switch ($chargerMode) {
             case 3:
@@ -136,10 +189,10 @@ class SolarCharger extends IPSModule
                             $target = min($target, $effectiveMax);
                         }
                         $target = max(0, $target);
-                        @IPS_RequestAction($gatewayId, 'target_current', $target);
                         if ($target !== (int)$value) {
                             $this->SetValue('chargerSetCurrent', $target);
                         }
+                        @IPS_RequestAction($gatewayId, 'target_current', $target);
                         break;
                     case 'chargerUpdate':
                         if ((bool)$value) { @IPS_RequestAction($gatewayId, 'update_now', true); }
@@ -842,12 +895,36 @@ class SolarCharger extends IPSModule
         $chargerData['chargerCurrent'] = $finalCurrent;
         $chargerData['chargerPower']   = $finalPower;
 
+        $totalConsumptionW = is_numeric($productionData['consumption']) ? (float)$productionData['consumption'] : null;
+        $rawHouseConsumptionW = is_numeric($houseConsumption) ? (float)$houseConsumption : null;
+        $chargerPowerW = max(0.0, $finalPower);
+        $chargerThresholdW = 100.0; // ignore subtraction for tiny residuals
+
+        $netHouseConsumptionW = $rawHouseConsumptionW;
+        if ($totalConsumptionW !== null) {
+            if ($chargerPowerW >= $chargerThresholdW) {
+                $candidate = $totalConsumptionW - $chargerPowerW;
+                if ($candidate < -$chargerThresholdW && $rawHouseConsumptionW !== null) {
+                    $netHouseConsumptionW = max(0.0, $rawHouseConsumptionW);
+                    $this->SendDebug('SolarCharger', sprintf('Net house fallback to raw (total %.1f W, charger %.1f W, raw %.1f W).', $totalConsumptionW, $chargerPowerW, $rawHouseConsumptionW), 0);
+                } else {
+                    $netHouseConsumptionW = max(0.0, $candidate);
+                }
+            } elseif ($rawHouseConsumptionW === null) {
+                $netHouseConsumptionW = $totalConsumptionW;
+            } else {
+                $netHouseConsumptionW = $rawHouseConsumptionW;
+            }
+        }
+
         $dataOut = [
             'battery'    => $batteryData + ['powerKw' => round($batteryFlowKw, 1)],
             'production' => $productionData,
             'charger'    => $chargerData,
             'house'      => [
-                'consumption' => $houseConsumption,
+                'consumption' => $netHouseConsumptionW,
+                'totalConsumption' => $totalConsumptionW,
+                'rawConsumption' => $rawHouseConsumptionW,
             ],
         ];
 
@@ -857,14 +934,13 @@ class SolarCharger extends IPSModule
         $this->SetVariables($dataOut);
     }
 
-    public function SetChargerCurrent(int $current): int
+    public function SetChargerCurrent(int $current, bool $force = false): int
     {
-        // Early outs based on module settings/state
-        if (!$this->ReadPropertyBoolean('enabled')) {
-            return 0;
-        }
-        if ((int)$this->GetValue('chargerMode') === 4) {
-            return 0;
+        $enabled = $this->ReadPropertyBoolean('enabled');
+        $chargerMode = (int)$this->GetValue('chargerMode');
+
+        if (!$enabled || $chargerMode === 4) {
+            $current = 0;
         }
 
         $effectiveMax = max(0, $this->resolveEffectiveMaxCurrent());
@@ -873,18 +949,27 @@ class SolarCharger extends IPSModule
         }
         $current = max(0, $current);
 
-        // Forward to Warp2Gateway if configured
+        $previous = (int)$this->GetValue('chargerSetCurrent');
+        if ($previous !== $current) {
+            $this->SetValue('chargerSetCurrent', $current);
+        }
+
         $gatewayId = (int)$this->ReadPropertyInteger('warp2Gateway');
         if ($gatewayId <= 0) {
             $this->LogMessage('SetChargerCurrent: No Warp2Gateway configured.', KL_WARNING);
-            return 0;
+            return $current;
         }
+
+        if ($previous === $current && !$force) {
+            return $current;
+        }
+
         try {
-            @IPS_RequestAction($gatewayId, 'target_current', (int)$current);
-            return (int)$current;
+            @IPS_RequestAction($gatewayId, 'target_current', $current);
+            return $current;
         } catch (Exception $e) {
             $this->LogMessage('SetChargerCurrent failed: ' . $e->getMessage(), KL_ERROR);
-            return 0;
+            return $current;
         }
     }
 
